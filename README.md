@@ -1,98 +1,140 @@
-# Orange Pi Zero 3W GPU/VPU image builder
+# Orange Pi Zero 3W GPU/VPU: in-place installer
 
-The Orange Pi Zero 3W's Allwinner A733 has an Imagination PowerVR BXM-4-64 GPU and an Allwinner Cedar video engine, but Orange Pi's stock images ship no userspace for either, leaving them unusable. Radxa's Cubie A7S uses the same A733 silicon and ships the missing PowerVR and Cedar userspace in its Debian image.
+Turn on the GPU and hardware video on an Orange Pi Zero 3W **that is already running the stock Ubuntu image**. No Docker, no second computer, no reflashing. One script, about 10 minutes.
 
-These scripts build an Orange Pi Zero 3W Ubuntu image with a working GPU and VPU by grafting that userspace out of a Radxa image you supply locally, then rebuilding the PowerVR kernel module against Orange Pi's kernel with DKMS. The bootloader, kernel, DTB, Wi-Fi, Bluetooth, desktop, and default user all stay exactly as Orange Pi shipped them.
+This is a fork of [Incipiens/OrangePiZero3W-GPU-VPU](https://github.com/Incipiens/OrangePiZero3W-GPU-VPU). The original builds a brand-new SD card image on a PC. This fork adds `opi-zero3w-gpu-inplace.sh`, which applies the same changes directly to a board you have already set up. All credit for working out the method goes to the original author; the background is in [his XDA article](https://www.xda-developers.com/orange-pi-zero-3w-beats-raspberry-pi-5-cant-use-half-hardware/).
 
-No proprietary binaries live in this repository. The GPU/VPU files come straight out of the Radxa image on your own machine at build time. There's a longer write-up in [this XDA article](https://www.xda-developers.com/orange-pi-zero-3w-beats-raspberry-pi-5-cant-use-half-hardware/).
+## The problem
 
-## What works
+The Zero 3W's Allwinner A733 chip has a PowerVR GPU and a hardware video engine, but Orange Pi's Ubuntu image ships without the software needed to use them. Everything graphical runs on the CPU.
 
-On the tested image pair, the result has:
+Radxa sells a board with the same chip (the Cubie A7S) and its image does include that software. The script copies the missing pieces out of a Radxa image you download yourself and builds the GPU kernel driver for Orange Pi's kernel.
 
-- PowerVR Vulkan/OpenGL ES/OpenCL userspace
-- `pvrsrvkm` rebuilt for Orange Pi's `6.6.98-sun60iw2` kernel, with PowerVR firmware and the Vulkan ICD in place
-- Allwinner CedarC/libcedarc userspace
-- Hardware video decode/encode through GStreamer's OMX plugins
-- Hardware-accelerated WebGL/WebGPU in Chromium via ANGLE-on-Vulkan, installed from the saiarcot895 PPA (Ubuntu's repository `chromium-browser` is only a Snap transition package that's unsuitable for this userspace). Two test launchers are added to the desktop. The first is a WebGL aquarium and the second is a `chrome://gpu` shortcut
-- Orange Pi's original bootloader, kernel, DTB, Wi-Fi, Bluetooth, desktop, and default user are all untouched
+## What you get
 
-## Source images
+| | Before | After |
+| --- | --- | --- |
+| GPU driver (`pvrsrvkm`) | not loaded | loaded at boot |
+| Vulkan | none | Vulkan 1.3 on PowerVR BXM-4-64 |
+| OpenGL ES / OpenCL libraries | none | installed |
+| Hardware video codecs (GStreamer OMX) | unusable | registered |
+| Chromium | Snap placeholder | real build with GPU launch icons |
 
-Download both images, then verify each against the checksum the vendor actually publishes. The two cover different files: OrangePi checksums the extracted `.img`, while Radxa checksums the downloaded `.xz`. Each value below is the one that vendor signs, so they're verified at different stages.
+Wi-Fi, Bluetooth, the bootloader, the kernel, your user account and your files are left alone.
 
-**Orange Pi Zero 3W: Ubuntu Jammy XFCE desktop, kernel 6.6.98**
-- Download: <http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/details/Orange-Pi-Zero-3W.html>
-- Archive `Orangepizero3w_1.0.0_ubuntu_jammy_desktop_xfce_linux6.6.98.7z`, which extracts to `Orangepizero3w_1.0.0_ubuntu_jammy_desktop_xfce_linux6.6.98.img`
-- SHA256 of the extracted `.img`: `af6697c4f158f63ffdf55f5a17453ef3b9b2895f35b2891e6090d28f65faf264`
+## Requirements
 
-**Radxa Cubie A7S: Bullseye KDE, kernel 5.15.147**
-- Download: <https://docs.radxa.com/en/cubie/a7s/download>
-- Archive `radxa-a733_bullseye_kde_r2.output_512.img.xz`, which extracts to `radxa-a733_bullseye_kde_r2.output_512.img`
-- SHA256 of the downloaded `.xz`: `1b5604fed61647ab1b510f24af5968477e8a7a361430aa0864efbed7b5fe6ca2`
+- Orange Pi Zero 3W running **`Orangepizero3w_1.0.0_ubuntu_jammy_desktop_xfce_linux6.6.98`**. This exact image is the only one tested.
+- Kernel `6.6.98-sun60iw2`. Check with `uname -r`.
+- About 10 GB of free space. Check with `df -h /`.
+- Internet access on the board.
+- A terminal on the board, either on its own screen or over SSH.
 
-```bash
-# OPi: verify the .img after extracting the .7z
-shasum -a 256 Orangepizero3w_1.0.0_ubuntu_jammy_desktop_xfce_linux6.6.98.img
+The script checks the kernel and stops with a clear message if it doesn't match.
 
-# Radxa: verify the downloaded archive before extracting
-shasum -a 256 radxa-a733_bullseye_kde_r2.output_512.img.xz
+## Install
+
+Run all of this on the Orange Pi.
+
+**1. Download and unpack the Radxa image** (1.1 GB download, 6.5 GB unpacked). The unpack step prints nothing and takes a few minutes.
+
+```
+cd ~
+wget https://github.com/radxa-build/radxa-a733/releases/download/rsdk-r2/radxa-a733_bullseye_kde_r2.output_512.img.xz
+xz -d radxa-a733_bullseye_kde_r2.output_512.img.xz
 ```
 
-I only tested this exact image pair. The scripts read partition offsets from each image's own partition table, but the package names and paths are hardcoded to those two BSP images, so a different or newer image may need small path/package-name fixes. When an input doesn't match, the scripts fail at the missing file rather than producing a broken image.
+**2. Download the script.**
 
-## Build a flashable image
-
-Install Docker, then run this from the repository root:
-
-```bash
-docker run --rm --privileged -v "$(pwd):/work" -w /work \
-  debian:bookworm-slim bash /work/scripts/build.sh
+```
+wget https://raw.githubusercontent.com/YOUR-USERNAME/OrangePiZero3W-GPU-VPU-inplace/main/opi-zero3w-gpu-inplace.sh
 ```
 
-The output is `hybrid-opi66-with-radxa-gpu-vpu.img`. Flash it with your usual imaging tool, or with `dd`.
+**3. Run it.**
 
-To rebuild the PowerVR module, `build.sh` runs DKMS against the kernel headers the stock Orange Pi image already ships at `/opt/linux-headers-current-sun60iw2_*.deb`. The build depends on that `.deb` being present there; the pinned image carries it.
-
-macOS:
-
-```bash
-diskutil list
-sudo diskutil unmountDisk /dev/diskN
-sudo dd if=hybrid-opi66-with-radxa-gpu-vpu.img of=/dev/rdiskN bs=4m status=progress
-sudo diskutil eject /dev/diskN
+```
+sudo bash ~/opi-zero3w-gpu-inplace.sh ~/radxa-a733_bullseye_kde_r2.output_512.img
 ```
 
-Login is unchanged: `orangepi`/`orangepi`.
+It goes quiet for several minutes while building the driver, and again while installing Chromium. Wait for `Done. Reboot now`.
 
-## Userspace tarballs only
+To skip Chromium, put `SKIP_CHROMIUM=1` in front: `sudo SKIP_CHROMIUM=1 bash ~/opi-zero3w-gpu-inplace.sh ...`
 
-To pull just the PowerVR and VPU userspace out of the Radxa image (for an Orange Pi 6.6 system you've already set up) skip the full build:
+**4. Reboot.**
 
-```bash
-docker run --rm --privileged -v "$(pwd):/work" -w /work \
-  debian:bookworm-slim bash /work/scripts/make-tarball.sh
 ```
-
-That produces `pvr-userspace.tar.gz` and `vpu-userspace.tar.gz`. Copy them to the board and extract as root:
-
-```bash
-sudo tar xzpf /tmp/pvr-userspace.tar.gz -C /
-sudo tar xzpf /tmp/vpu-userspace.tar.gz -C /
-sudo ldconfig
-sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo reboot
 ```
 
-This does not build the PowerVR kernel module. Use the full image builder if you want DKMS handled for you.
+## Check that it worked
 
-## Scripts
+```
+lsmod | grep pvrsrvkm
+sudo apt install -y vulkan-tools
+vulkaninfo --summary 2>/dev/null | grep -E "deviceName|driverName"
+gst-inspect-1.0 | grep -c omx
+```
 
-- `scripts/build.sh`: builds the full hybrid image
-- `scripts/make-tarball.sh`: pulls the PowerVR/VPU userspace tarballs from the Radxa image
+A pass looks like this:
 
-## License and redistribution
+```
+pvrsrvkm             1302528  17
+        deviceName         = PowerVR B-Series BXM-4-64 MC1
+        driverName         = PowerVR B-Series Vulkan Driver
+12
+```
 
-The scripts and documentation here are MIT licensed. The Radxa, Imagination Technologies, and Allwinner binaries the scripts copy are not. They come from the Radxa image you provide locally and stay under their original licenses.
+- A `pvrsrvkm` line means the driver is loaded.
+- `PowerVR B-Series BXM-4-64 MC1` means Vulkan is using the real GPU.
+- A number above zero on the last line means hardware video codecs are available.
 
-Don't open PRs containing source images, generated hybrid images, or the userspace tarballs.
+Two icons also appear on the desktop: **Chromium - WebGL Test (Aquarium)** and **Chromium - chrome://gpu**. They launch Chromium with the flags it needs to use the GPU.
+
+Once you're happy, get 6.5 GB back:
+
+```
+rm ~/radxa-a733_bullseye_kde_r2.output_512.img
+```
+
+## Limitations
+
+- **Firefox** still renders in software. Use the Chromium icons.
+- **mpv** and other FFmpeg-based players can't use the hardware decoder. Hardware video goes through GStreamer or Chromium.
+- **Don't run `sudo apt upgrade`** or upgrade the Ubuntu release. Updates to graphics and video packages can overwrite parts of this setup, and the driver is built for kernel 6.6.98 only. Installing individual programs with `apt install` is fine.
+- **Tested on one board** with the one image listed above. Video playback and the NPU demo were not tested beyond confirming the codecs register.
+
+## If something goes wrong
+
+**The script stops with an error.** Nothing is half-working in a dangerous way; read the last line. The common causes are the wrong image version, a kernel that isn't `6.6.98-sun60iw2`, or the Radxa file still being a `.xz`.
+
+**No desktop after reboot.** Log in over SSH, or press Ctrl+Alt+F2 on the board, then:
+
+```
+sudo rm /etc/X11/xorg.conf.d/20-modesetting.conf
+sudo reboot
+```
+
+**The board hangs or won't boot.** Reflash the stock Orange Pi image and start again. There is no uninstall script. Files the script overwrites are saved in `/root/gpu-inplace-backup-<date>`.
+
+**You tried a manual GPU install before this.** Leftovers can block the driver. Before running the script, make sure this prints "No such file" and nothing else:
+
+```
+ls /etc/modprobe.d/*pvrsrvkm* ; sudo dkms status
+```
+
+## Why doing it by hand tends to fail
+
+Loading the GPU driver adds a second graphics device (`card1`) that can render but has no display output. Left alone, Xorg may pick it as the screen, fail with `KMS doesn't support dumb interface`, and leave you with no desktop. The script writes an Xorg config that pins the display to `card0`, and turns on `ShadowFB` and a software cursor so the X server itself stays off the PowerVR driver. That config comes from the original project.
+
+## What the script changes
+
+- Copies PowerVR libraries, firmware and the Vulkan ICD from the Radxa image.
+- Copies the Allwinner video libraries and GStreamer OMX plugin, and patches `/etc/xdg/gstomx.conf`.
+- Installs the kernel headers that ship in `/opt` and builds `pvrsrvkm` with DKMS.
+- Loads `pvrsrvkm` at boot (`/etc/modules-load.d/pvr.conf`).
+- Writes `/etc/X11/xorg.conf.d/20-modesetting.conf` and a udev rule for the video device.
+- Adds the saiarcot895 Chromium PPA, installs Chromium and adds two desktop icons.
+
+## License
+
+The scripts are MIT licensed, same as the original project. The Radxa, Imagination Technologies and Allwinner files the script copies are **not** included here and stay under their own licenses. They come from the Radxa image you download yourself. Please don't upload those files, the Radxa image, or copies of them to this repository.
