@@ -124,7 +124,16 @@ ls /etc/modprobe.d/*pvrsrvkm* ; sudo dkms status
 
 ## Why doing it by hand tends to fail
 
-Loading the GPU driver adds a second graphics device (`card1`) that can render but has no display output. Left alone, Xorg may pick it as the screen, fail with `KMS doesn't support dumb interface`, and leave you with no desktop. The script writes an Xorg config that pins the display to `card0`, and turns on `ShadowFB` and a software cursor so the X server itself stays off the PowerVR driver. That config comes from the original project.
+Loading the GPU driver adds a second graphics device (`card1`) that can render but has no display output. Left alone, Xorg may pick it as the screen, fail with `KMS doesn't support dumb interface`, and leave you with no desktop. The script writes an Xorg config that pins the display to `card0` and turns on `ShadowFB` and a software cursor. That config comes from the original project.
+
+This fork adds one line to it: `Option "AccelMethod" "none"`. Without it, Xorg still enables its own GPU acceleration (glamor) on the PowerVR driver, ignores `ShadowFB`, and the mouse cursor leaves trails and smears across the screen. With it, the desktop draws in software and the trails are gone; programs that use Vulkan directly still get the GPU.
+
+If you installed with an older copy of the script and see cursor trails, fix it with:
+
+```
+sudo sed -i 's|Option "ShadowFB" "true"|Option "ShadowFB" "true"\n    Option "AccelMethod" "none"|' /etc/X11/xorg.conf.d/20-modesetting.conf
+sudo reboot
+```
 
 ## What the script changes
 

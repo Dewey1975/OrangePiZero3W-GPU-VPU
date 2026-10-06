@@ -150,6 +150,7 @@ Section "OutputClass"
     Option "kmsdev" "/dev/dri/card0"
     Option "SWcursor" "true"
     Option "ShadowFB" "true"
+    Option "AccelMethod" "none"
 EndSection
 
 Section "Device"
@@ -158,6 +159,7 @@ Section "Device"
     Option "kmsdev" "/dev/dri/card0"
     Option "SWcursor" "true"
     Option "ShadowFB" "true"
+    Option "AccelMethod" "none"
 EndSection
 EOF
 
